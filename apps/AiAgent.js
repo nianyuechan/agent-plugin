@@ -2,6 +2,8 @@ import cfg, { hasApiKey, getMaskedKey, saveConfig } from "../lib/config.js"
 import { chatCompletion, streamChat } from "../lib/api.js"
 import { getHistory, addMessage, clearHistory, buildContext } from "../lib/history.js"
 import { runAgent } from "../lib/agent.js"
+import { exec } from "node:child_process"
+import path from "node:path"
 
 const processing = new Set()
 
@@ -44,6 +46,7 @@ export class AiAgent extends plugin {
         { reg: "^#ai历史", fnc: "showHistory", permission: "master" },
         { reg: "^#ai设置\\s+(.+)", fnc: "setConfig", permission: "master" },
         { reg: "^#ai配置", fnc: "showConfig", permission: "master" },
+        { reg: "^#ai更新$", fnc: "updatePlugin", permission: "master" },
         { reg: "^#ai帮助", fnc: "showHelp", permission: "master" },
       ],
     })
@@ -208,6 +211,23 @@ export class AiAgent extends plugin {
     await e.reply(lines.join("\n"))
   }
 
+  async updatePlugin(e) {
+    const pluginDir = path.join(process.cwd(), "plugins/agent-plugin")
+    await e.reply("⏳ 正在更新 agent-plugin...")
+    exec("git pull", { cwd: pluginDir }, (err, stdout, stderr) => {
+      if (err) {
+        e.reply(`❌ 更新失败: ${err.message}`)
+        return
+      }
+      const output = (stdout || "").trim()
+      if (output === "Already up to date.") {
+        e.reply("✅ agent-plugin 已是最新版本")
+      } else {
+        e.reply(`✅ agent-plugin 更新成功\n${output}`)
+      }
+    })
+  }
+
   async showHelp(e) {
     const help = [
       "🤖 AI Agent 帮助",
@@ -219,6 +239,7 @@ export class AiAgent extends plugin {
       "#ai历史            查看对话历史",
       "#ai设置 <k> <v>    修改配置",
       "#ai配置            查看当前配置",
+      "#ai更新            更新插件",
       "═".repeat(22),
       "⚙️ 可设置项:",
       "apiKey, apiUrl, model,",
