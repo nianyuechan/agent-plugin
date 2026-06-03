@@ -2,6 +2,7 @@ import cfg, { hasApiKey, getMaskedKey, saveConfig } from "../lib/config.js"
 import { chatCompletion, streamChat } from "../lib/api.js"
 import { getHistory, addMessage, clearHistory, buildContext } from "../lib/history.js"
 import { runAgent } from "../lib/agent.js"
+import { getSkills, getSkillHelp } from "../lib/skill.js"
 import { exec } from "node:child_process"
 import path from "node:path"
 
@@ -47,6 +48,8 @@ export class AiAgent extends plugin {
         { reg: "^#ai设置\\s+(.+)", fnc: "setConfig", permission: "master" },
         { reg: "^#ai配置", fnc: "showConfig", permission: "master" },
         { reg: "^#ai更新$", fnc: "updatePlugin", permission: "master" },
+        { reg: "^#ai技能$", fnc: "listSkills", permission: "master" },
+        { reg: "^#ai技能\\s+(\\S+)", fnc: "showSkillHelp", permission: "master" },
         { reg: "^#ai帮助", fnc: "showHelp", permission: "master" },
       ],
     })
@@ -228,6 +231,24 @@ export class AiAgent extends plugin {
     })
   }
 
+  async listSkills(e) {
+    const skills = await getSkills()
+    if (!skills.length) return e.reply("📭 暂无可用技能")
+
+    const lines = ["📦 可用技能列表", "═".repeat(22)]
+    for (const skill of skills) {
+      lines.push(`• ${skill.name}`)
+    }
+    lines.push("═".repeat(22), "使用 #ai技能 <插件名> 查看详情")
+    await e.reply(lines.join("\n"))
+  }
+
+  async showSkillHelp(e) {
+    const pluginName = e.msg.replace(/^#ai技能\s+/, "").trim()
+    const help = await getSkillHelp(pluginName)
+    await e.reply(help)
+  }
+
   async showHelp(e) {
     const help = [
       "🤖 AI Agent 帮助",
@@ -240,6 +261,8 @@ export class AiAgent extends plugin {
       "#ai设置 <k> <v>    修改配置",
       "#ai配置            查看当前配置",
       "#ai更新            更新插件",
+      "#ai技能            列出可用技能",
+      "#ai技能 <名>       查看技能详情",
       "═".repeat(22),
       "⚙️ 可设置项:",
       "apiKey, apiUrl, model,",
