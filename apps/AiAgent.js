@@ -62,8 +62,19 @@ export class AiAgent extends plugin {
       const messages = buildContext(userId, cfg.systemPrompt)
       const response = await chatCompletion(messages)
       addMessage(userId, "assistant", response)
-      const parts = splitMessage(response)
-      await sendMultiMsg(e, parts)
+
+      const TAG_REGEX = /<(cmd|yunzai|read|readdir|done)>([\s\S]*?)<\/\1>/g
+      const hasTags = TAG_REGEX.test(response)
+      TAG_REGEX.lastIndex = 0
+
+      if (hasTags) {
+        const result = await runAgent(e, null, null, response)
+        const parts = splitMessage(result)
+        await sendMultiMsg(e, parts)
+      } else {
+        const parts = splitMessage(response)
+        await sendMultiMsg(e, parts)
+      }
     } catch (err) {
       await e.reply(`❌ AI 调用失败: ${err.message}`)
     } finally {
