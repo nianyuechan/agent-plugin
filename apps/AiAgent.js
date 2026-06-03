@@ -232,16 +232,17 @@ export class AiAgent extends plugin {
   async updatePlugin(e) {
     const pluginDir = path.join(process.cwd(), "plugins/agent-plugin")
     await e.reply("⏳ 正在更新 agent-plugin...")
-    exec("git pull", { cwd: pluginDir }, (err, stdout, stderr) => {
+    exec("git stash ; git pull ; git stash pop", { cwd: pluginDir, shell: true }, (err, stdout, stderr) => {
       if (err) {
         e.reply(`❌ 更新失败: ${err.message}`)
         return
       }
-      const output = (stdout || "").trim()
-      if (output === "Already up to date.") {
+      const combined = (stdout || "") + (stderr || "")
+      const output = combined.trim()
+      if (output.includes("Already up to date")) {
         e.reply("✅ agent-plugin 已是最新版本")
       } else {
-        e.reply(`✅ agent-plugin 更新成功\n${output}`)
+        e.reply(`✅ agent-plugin 更新成功\n${output.slice(0, 2000)}`)
       }
     })
   }
