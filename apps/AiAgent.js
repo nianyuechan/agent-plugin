@@ -37,10 +37,27 @@ function splitMessage(text, maxLen = 2500) {
   return messages
 }
 
-async function sendMultiMsg(e, parts) {
-  for (const part of parts) {
-    await e.reply(part)
-    if (parts.length > 1) await new Promise(r => setTimeout(r, 500))
+async function sendAsForward(e, title, text) {
+  const parts = splitMessage(text)
+  if (parts.length <= 1 && text.length <= 800) {
+    return e.reply(text)
+  }
+  const forwardMsg = []
+  if (title) forwardMsg.push({ message: title })
+  for (const part of parts) forwardMsg.push({ message: part })
+  try {
+    if (e?.group?.makeForwardMsg) {
+      return await e.reply(await e.group.makeForwardMsg(forwardMsg))
+    } else if (e?.friend?.makeForwardMsg) {
+      return await e.reply(await e.friend.makeForwardMsg(forwardMsg))
+    } else {
+      return await e.reply(await Bot.makeForwardMsg(forwardMsg))
+    }
+  } catch {
+    for (const part of parts) {
+      await e.reply(part)
+      if (parts.length > 1) await new Promise(r => setTimeout(r, 500))
+    }
   }
 }
 
@@ -78,8 +95,7 @@ export class AiAgent extends plugin {
     processing.add(userId)
     try {
       const response = await agentCore.quickChat(userId, userMessage, cfg.systemPrompt)
-      const parts = splitMessage(response)
-      await sendMultiMsg(e, parts)
+      await sendAsForward(e, `🤖 AI 回复`, response)
     } catch (err) {
       await e.reply(`❌ AI 调用失败: ${err.message}`)
     } finally {
@@ -98,8 +114,7 @@ export class AiAgent extends plugin {
     try {
       await e.reply("🤖 Agent 开始执行...")
       const result = await agentCore.run(userId, e, userMessage, cfg.agentSystemPrompt)
-      const parts = splitMessage(result)
-      await sendMultiMsg(e, parts)
+      await sendAsForward(e, `🤖 Agent 执行结果`, result)
     } catch (err) {
       await e.reply(`❌ Agent 执行失败: ${err.message}`)
     } finally {
@@ -175,14 +190,8 @@ export class AiAgent extends plugin {
       lines.push(`${role} ${content}${toolInfo}`)
     }
 
-    const header = `📜 对话历史 (${state.messageCount}条, ~${state.estimatedTokens} tokens${state.compressed ? ", 已压缩" : ""})\n${"─".repeat(24)}`
-    const result = splitMessage(lines.join("\n"), 2500)
-    if (result.length <= 1) {
-      await e.reply(`${header}\n${lines.join("\n")}`)
-    } else {
-      result[0] = `${header}\n${result[0]}`
-      await sendMultiMsg(e, result)
-    }
+    const header = `📜 对话历史 (${state.messageCount}条, ~${state.estimatedTokens} tokens${state.compressed ? ", 已压缩" : ""})`
+    await sendAsForward(e, header, lines.join("\n"))
   }
 
   async setConfig(e) {
@@ -292,7 +301,7 @@ export class AiAgent extends plugin {
     } else {
       lines.push("👤 用户记忆: (空)")
     }
-    await sendMultiMsg(e, splitMessage(lines.join("\n"), 2500))
+    await sendAsForward(e, "🧠 记忆状态", lines.join("\n"))
   }
 
   async showHelp(e) {
@@ -324,6 +333,6 @@ export class AiAgent extends plugin {
       "═".repeat(22),
       "⚠️ 仅限主人使用",
     ]
-    await sendMultiMsg(e, help)
+    await sendAsForward(e, "🤖 AI Agent 帮助", help.join("\n"))
   }
 }
