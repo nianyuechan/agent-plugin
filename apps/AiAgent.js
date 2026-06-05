@@ -265,6 +265,7 @@ export class AiAgent extends plugin {
 
     const allowedKeys = [
       "apiKey", "apiUrl", "model",
+      "agentApiKey", "agentApiUrl", "agentModel",
       "systemPrompt", "agentSystemPrompt",
       "maxHistoryPairs", "maxTokens", "agentMaxRounds",
       "streamInterval", "streamChunkSize",
@@ -289,6 +290,9 @@ export class AiAgent extends plugin {
       `apiKey: ${getMaskedKey()}`,
       `apiUrl: ${cfg.apiUrl || "未设置"}`,
       `model: ${cfg.model || "未设置"}`,
+      `agentApiKey: ${cfg.agentApiKey ? "****" + String(cfg.agentApiKey).slice(-4) : "未设置"}`,
+      `agentApiUrl: ${cfg.agentApiUrl || "未设置"}`,
+      `agentModel: ${cfg.agentModel || "未设置"}`,
       `personality: ${(cfg.personality || "未设置").slice(0, 60)}...`,
       `systemPrompt: ${(cfg.systemPrompt || "未设置").slice(0, 60)}...`,
       `agentSystemPrompt: ${(cfg.agentSystemPrompt || "未设置").slice(0, 60)}...`,
@@ -384,7 +388,8 @@ export class AiAgent extends plugin {
       "#ai记忆            查看持久记忆",
       "═".repeat(22),
       "⚙️ 可设置项:",
-      "apiKey, apiUrl, model,",
+      "apiKey, apiUrl, model (AI对话)",
+      "agentApiKey, agentApiUrl, agentModel (Agent模式)",
       "systemPrompt, agentSystemPrompt,",
       "personality,",
       "maxHistoryPairs, maxTokens,",
