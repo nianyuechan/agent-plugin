@@ -14,6 +14,7 @@ import "../lib/tools/builtin/yunzai.js"
 import "../lib/tools/builtin/file.js"
 import "../lib/tools/builtin/code.js"
 import "../lib/tools/builtin/memory.js"
+import "../lib/tools/builtin/send_image.js"
 
 import { exec } from "node:child_process"
 import path from "node:path"
@@ -37,14 +38,57 @@ function splitMessage(text, maxLen = 2500) {
   return messages
 }
 
-async function sendAsForward(e, title, text) {
+/**
+ * 从文本中提取图片 URL，返回清理后的文本和 segment.image 数组
+ * 支持：markdown 图片、独立行图片 URL、base64 图片
+ */
+function extractImageUrls(text) {
+  if (!text) return { cleanedText: "", images: [] }
+  const images = []
+  let cleaned = text
+
+  // 1. Markdown 图片：![alt](url)
+  cleaned = cleaned.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+    images.push(segment.image(url))
+    return ""
+  })
+
+  // 2. 独立行的网络图片 URL（以图片扩展名结尾，可带 query 参数）
+  cleaned = cleaned.replace(
+    /(?:^|\n)\s*(https?:\/\/[^\s<>"']+\.(?:jpg|jpeg|png|gif|webp|bmp)(?:\?[^\s<>"']*)?)\s*(?:\n|$)/gi,
+    (_, url) => {
+      images.push(segment.image(url))
+      return "\n"
+    }
+  )
+
+  // 3. 独立行的 base64 图片
+  cleaned = cleaned.replace(
+    /(?:^|\n)\s*(base:\/\/[^\s<>"']+)\s*(?:\n|$)/gi,
+    (_, url) => {
+      images.push(segment.image(url))
+      return "\n"
+    }
+  )
+
+  // 清理多余空行
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim()
+  return { cleanedText: cleaned, images }
+}
+
+async function sendAsForward(e, title, text, images = []) {
   const parts = splitMessage(text)
-  if (parts.length <= 1 && text.length <= 800) {
+  const hasImages = images && images.length > 0
+
+  if (!hasImages && parts.length <= 1 && text.length <= 800) {
     return e.reply(text)
   }
+
   const forwardMsg = []
   if (title) forwardMsg.push({ message: title })
   for (const part of parts) forwardMsg.push({ message: part })
+  for (const img of images) forwardMsg.push({ message: [img] })
+
   try {
     if (e?.group?.makeForwardMsg) {
       return await e.reply(await e.group.makeForwardMsg(forwardMsg))
@@ -57,6 +101,9 @@ async function sendAsForward(e, title, text) {
     for (const part of parts) {
       await e.reply(part)
       if (parts.length > 1) await new Promise(r => setTimeout(r, 500))
+    }
+    for (const img of images) {
+      await e.reply(img)
     }
   }
 }
@@ -90,12 +137,14 @@ export class AiAgent extends plugin {
     const userId = e.user_id
     if (processing.has(userId)) return e.reply("⏳ 正在处理中，请稍候...")
     const userMessage = e.msg.replace(/^#ai\s+/, "").trim()
-    if (!userMessage) return e.reply("❌ 请输入内容: #ai <消息>")
+    if (!userMessage && !e.img?.length) return e.reply("❌ 请输入内容: #ai <消息>")
 
     processing.add(userId)
     try {
-      const response = await agentCore.quickChat(userId, userMessage, cfg.systemPrompt)
-      await sendAsForward(e, `🤖 AI 回复`, response)
+      const imageUrls = e.img || []
+      const response = await agentCore.quickChat(userId, userMessage || "请描述这张图片", cfg.systemPrompt, imageUrls)
+      const { cleanedText, images } = extractImageUrls(response)
+      await sendAsForward(e, `🤖 AI 回复`, cleanedText, images)
     } catch (err) {
       await e.reply(`❌ AI 调用失败: ${err.message}`)
     } finally {
@@ -108,13 +157,14 @@ export class AiAgent extends plugin {
     const userId = e.user_id
     if (processing.has(userId)) return e.reply("⏳ 正在处理中，请稍候...")
     const userMessage = e.msg.replace(/^#agent\s+/, "").trim()
-    if (!userMessage) return e.reply("❌ 请输入任务: #agent <任务描述>")
+    if (!userMessage && !e.img?.length) return e.reply("❌ 请输入任务: #agent <任务描述>")
 
     processing.add(userId)
     try {
       await e.reply("🤖 Agent 开始执行...")
-      const result = await agentCore.run(userId, e, userMessage, cfg.agentSystemPrompt)
-      await sendAsForward(e, `🤖 Agent 执行结果`, result)
+      const imageUrls = e.img || []
+      const result = await agentCore.run(userId, e, userMessage || "请描述这张图片", cfg.agentSystemPrompt, imageUrls)
+      await sendAsForward(e, `🤖 Agent 执行结果`, result.text, result.images)
     } catch (err) {
       await e.reply(`❌ Agent 执行失败: ${err.message}`)
     } finally {
@@ -133,7 +183,18 @@ export class AiAgent extends plugin {
     try {
       contextManager.initSession(userId)
       const systemPrompt = await promptBuilder.build(userId, { personality: cfg.systemPrompt })
-      contextManager.addMessage(userId, "user", userMessage)
+
+      // 支持用户发送的图片（多模态输入）
+      const imageUrls = e.img || []
+      if (imageUrls.length) {
+        const content = [
+          { type: "text", text: userMessage },
+          ...imageUrls.map(url => ({ type: "image_url", image_url: { url } })),
+        ]
+        contextManager.addMessage(userId, "user", content)
+      } else {
+        contextManager.addMessage(userId, "user", userMessage)
+      }
 
       const apiMessages = [{ role: "system", content: systemPrompt }, ...contextManager.getMessages(userId)]
       let fullResponse = ""
@@ -153,7 +214,15 @@ export class AiAgent extends plugin {
         }
       }
       if (chunk) await e.reply(chunk)
-      contextManager.addMessage(userId, "assistant", fullResponse)
+
+      // 从完整响应中提取图片 URL 并发送
+      const { cleanedText, images } = extractImageUrls(fullResponse)
+      if (images.length) {
+        for (const img of images) {
+          await e.reply(img)
+        }
+      }
+      contextManager.addMessage(userId, "assistant", cleanedText)
     } catch (err) {
       await e.reply(`❌ 流式调用失败: ${err.message}`)
     } finally {
