@@ -141,7 +141,7 @@ export class AiAgent extends plugin {
     // #ai 支持并行：不检查 processing，直接执行
     try {
       const imageUrls = e.img || []
-      const response = await agentCore.quickChat(userId, userMessage || "请描述这张图片", cfg.systemPrompt, imageUrls)
+      const response = await agentCore.quickChat(userId, userMessage || "请描述这张图片", cfg.systemPrompt, imageUrls, e)
       const { cleanedText, images } = extractImageUrls(response)
       await sendAsForward(e, `🤖 AI 回复`, cleanedText, images)
     } catch (err) {
@@ -178,7 +178,7 @@ export class AiAgent extends plugin {
     // #ai流式 同样支持并行
     try {
       contextManager.initSession(userId)
-      const systemPrompt = await promptBuilder.build(userId, { personality: cfg.systemPrompt })
+      const systemPrompt = await promptBuilder.build(userId, { personality: cfg.systemPrompt, event: e })
 
       // 支持用户发送的图片（多模态输入）
       const imageUrls = e.img || []
