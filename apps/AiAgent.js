@@ -19,7 +19,7 @@ import "../lib/tools/builtin/send_image.js"
 import { exec } from "node:child_process"
 import path from "node:path"
 
-const processing = new Set()
+let agentRunning = false  // #agent 全局锁，同一时间只能有一个任务
 
 function splitMessage(text, maxLen = 2500) {
   if (!text) return []
@@ -135,11 +135,10 @@ export class AiAgent extends plugin {
   async chat(e) {
     if (!hasApiKey()) return e.reply("❌ 未配置 API Key")
     const userId = e.user_id
-    if (processing.has(userId)) return e.reply("⏳ 正在处理中，请稍候...")
     const userMessage = e.msg.replace(/^#ai\s+/, "").trim()
     if (!userMessage && !e.img?.length) return e.reply("❌ 请输入内容: #ai <消息>")
 
-    processing.add(userId)
+    // #ai 支持并行：不检查 processing，直接执行
     try {
       const imageUrls = e.img || []
       const response = await agentCore.quickChat(userId, userMessage || "请描述这张图片", cfg.systemPrompt, imageUrls)
@@ -147,19 +146,17 @@ export class AiAgent extends plugin {
       await sendAsForward(e, `🤖 AI 回复`, cleanedText, images)
     } catch (err) {
       await e.reply(`❌ AI 调用失败: ${err.message}`)
-    } finally {
-      processing.delete(userId)
     }
   }
 
   async agent(e) {
     if (!hasApiKey()) return e.reply("❌ 未配置 API Key")
+    if (agentRunning) return e.reply("⏳ Agent 正在执行任务中，请等待当前任务完成...")
     const userId = e.user_id
-    if (processing.has(userId)) return e.reply("⏳ 正在处理中，请稍候...")
     const userMessage = e.msg.replace(/^#agent\s+/, "").trim()
     if (!userMessage && !e.img?.length) return e.reply("❌ 请输入任务: #agent <任务描述>")
 
-    processing.add(userId)
+    agentRunning = true
     try {
       await e.reply("🤖 Agent 开始执行...")
       const imageUrls = e.img || []
@@ -168,18 +165,17 @@ export class AiAgent extends plugin {
     } catch (err) {
       await e.reply(`❌ Agent 执行失败: ${err.message}`)
     } finally {
-      processing.delete(userId)
+      agentRunning = false
     }
   }
 
   async streamChatCmd(e) {
     if (!hasApiKey()) return e.reply("❌ 未配置 API Key")
     const userId = e.user_id
-    if (processing.has(userId)) return e.reply("⏳ 正在处理中，请稍候...")
     const userMessage = e.msg.replace(/^#ai流式\s+/, "").trim()
     if (!userMessage) return e.reply("❌ 请输入内容: #ai流式 <消息>")
 
-    processing.add(userId)
+    // #ai流式 同样支持并行
     try {
       contextManager.initSession(userId)
       const systemPrompt = await promptBuilder.build(userId, { personality: cfg.systemPrompt })
@@ -225,8 +221,6 @@ export class AiAgent extends plugin {
       contextManager.addMessage(userId, "assistant", cleanedText)
     } catch (err) {
       await e.reply(`❌ 流式调用失败: ${err.message}`)
-    } finally {
-      processing.delete(userId)
     }
   }
 
