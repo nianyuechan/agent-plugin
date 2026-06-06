@@ -15,6 +15,7 @@ import "../lib/tools/builtin/file.js"
 import "../lib/tools/builtin/code.js"
 import "../lib/tools/builtin/memory.js"
 import "../lib/tools/builtin/send_image.js"
+import "../lib/tools/builtin/group.js"
 
 import { exec } from "node:child_process"
 import path from "node:path"
@@ -116,18 +117,19 @@ export class AiAgent extends plugin {
       event: "message",
       priority: 1000,
       rule: [
-        { reg: "^#ai\\s+(.+)", fnc: "chat", permission: "master" },
+        { reg: "^#ai\\s+(.+)", fnc: "chat" },
         { reg: "^#agent\\s+(.+)", fnc: "agent", permission: "master" },
-        { reg: "^#ai流式\\s+(.+)", fnc: "streamChatCmd", permission: "master" },
-        { reg: "^#ai清除", fnc: "clearChat", permission: "master" },
-        { reg: "^#ai历史", fnc: "showHistory", permission: "master" },
+        { reg: "^#ai流式\\s+(.+)", fnc: "streamChatCmd" },
+        { reg: "^#aireset$", fnc: "resetAll", permission: "master" },
+        { reg: "^#ai清除", fnc: "clearChat" },
+        { reg: "^#ai历史", fnc: "showHistory" },
         { reg: "^#ai设置\\s+(.+)", fnc: "setConfig", permission: "master" },
         { reg: "^#ai配置", fnc: "showConfig", permission: "master" },
         { reg: "^#ai更新$", fnc: "updatePlugin", permission: "master" },
-        { reg: "^#ai技能$", fnc: "listSkills", permission: "master" },
-        { reg: "^#ai技能\\s+(\\S+)", fnc: "showSkillHelp", permission: "master" },
-        { reg: "^#ai记忆", fnc: "showMemory", permission: "master" },
-        { reg: "^#ai帮助", fnc: "showHelp", permission: "master" },
+        { reg: "^#ai技能$", fnc: "listSkills" },
+        { reg: "^#ai技能\\s+(\\S+)", fnc: "showSkillHelp" },
+        { reg: "^#ai记忆", fnc: "showMemory" },
+        { reg: "^#ai帮助", fnc: "showHelp" },
       ],
     })
   }
@@ -229,6 +231,40 @@ export class AiAgent extends plugin {
     agentCore.clearSession(userId)
     contextManager.clear(userId)
     await e.reply("✅ 已清除对话历史和上下文")
+  }
+
+  async resetAll(e) {
+    // 1. 清空所有用户的对话缓存
+    const userCount = agentCore.clearAllSessions()
+
+    // 2. 刷新记忆缓存（重新从磁盘加载，确保干净状态）
+    await memoryManager.flush()
+    memoryManager._globalMemory = null
+    memoryManager._userMemories.clear()
+
+    // 3. 重新扫描技能
+    skillRegistry.clear()
+    await scanSkills()
+
+    // 4. 重建技能目录写入全局记忆
+    const catalog = skillRegistry.getFullSkillCatalog()
+    if (catalog) {
+      await memoryManager.updateGlobalMemory(catalog)
+      await memoryManager.flush()
+    }
+
+    const lines = [
+      "🔄 AI Agent 已重置",
+      "═".repeat(22),
+      `✅ 已清空 ${userCount} 个用户的对话缓存`,
+      `✅ 已刷新记忆缓存`,
+      `✅ 已重新扫描 ${skillRegistry.getEnabled().length} 个插件技能`,
+      `✅ 已重建全局记忆中的插件指令清单`,
+      "═".repeat(22),
+      "Agent 已恢复到初始化状态",
+    ]
+    await e.reply(lines.join("\n"))
+    logger.info(`[Agent] #aireset: 已清空 ${userCount} 个用户缓存，重新初始化完成`)
   }
 
   async showHistory(e) {
@@ -378,7 +414,8 @@ export class AiAgent extends plugin {
       "#ai <消息>         AI 对话",
       "#agent <任务>      Agent 模式（可调用工具）",
       "#ai流式 <消息>     流式对话（逐段发送）",
-      "#ai清除            清除对话历史",
+      "#aireset           重置所有对话缓存并初始化",
+      "#ai清除            清除当前对话历史",
       "#ai历史            查看对话历史",
       "#ai设置 <k> <v>    修改配置",
       "#ai配置            查看当前配置",
@@ -399,7 +436,7 @@ export class AiAgent extends plugin {
       "🤖 Agent 模式可用工具:",
       ...toolRegistry.getNames().map(n => `  • ${n}`),
       "═".repeat(22),
-      "⚠️ 仅限主人使用",
+      "⚠️ #agent/#aireset/#ai设置/#ai配置/#ai更新 仅限主人使用",
     ]
     await sendAsForward(e, "🤖 AI Agent 帮助", help.join("\n"))
   }
