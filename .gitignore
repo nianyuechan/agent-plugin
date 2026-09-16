@@ -1,2 +1,5 @@
 node_modules/
 config.yaml
+data/
+*.log
+.DS_Store
