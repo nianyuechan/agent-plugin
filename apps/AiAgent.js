@@ -1,6 +1,6 @@
 import cfg, { hasApiKey, getMaskedKey, maskSecret, saveConfig } from "../lib/config.js"
 import { streamChat } from "../lib/api.js"
-import agentCore from "../lib/core/agent.js"
+import agentCore, { onApprovalRequest } from "../lib/core/agent.js"
 import contextManager, { sessionKeyOf } from "../lib/core/context.js"
 import promptBuilder from "../lib/core/prompt.js"
 import memoryManager from "../lib/memory/manager.js"
@@ -23,6 +23,45 @@ import path from "node:path"
 
 let agentRunning = false        // #agent 全局锁，同一时间只能有一个任务
 let agentWatchdog = null        // 兜底定时器，防止异常情况下锁死
+
+/* ------------------------------ 聊天内审批 ------------------------------ */
+/**
+ * DSH 的 approval/request 应答者在聊天场景下的实现：
+ * 高危工具被挂起 → 机器人提问 → 主人回复「允许/拒绝」→ 决议写回会话审计。
+ * 没有应答者作答时引擎会失败关闭（unavailable），绝不静默执行。
+ */
+const pendingApprovals = new Map()
+
+function approvalKey(e) {
+  return sessionKeyOf(e, e.user_id)
+}
+
+onApprovalRequest(async ({ agent, tool, reason }) => {
+  const e = agent?.context?.event
+  if (!e?.reply) return "unavailable"
+
+  const key = approvalKey(e)
+  const timeoutMs = Number(cfg.approvalTimeout) > 0 ? Number(cfg.approvalTimeout) : 120000
+
+  await e.reply([
+    "⚠️ Agent 请求执行高危操作，需要你确认",
+    "═".repeat(20),
+    `工具: ${tool}`,
+    `原因: ${reason || "-"}`,
+    "═".repeat(20),
+    "回复「允许」执行一次，或「拒绝」取消",
+    `（${Math.round(timeoutMs / 1000)} 秒后自动拒绝）`,
+  ].join("\n"))
+
+  return await new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingApprovals.delete(key)
+      resolve("timeout")
+    }, timeoutMs)
+    timer.unref?.()
+    pendingApprovals.set(key, { resolve, timer, tool })
+  })
+})
 
 const IMAGE_EXT = /\.(?:jpg|jpeg|png|gif|webp|bmp)(?:\?[^\s<>"']*)?$/i
 
@@ -188,11 +227,26 @@ export class AiAgent extends plugin {
         { reg: "^#ai技能\\s+(\\S+)", fnc: "showSkillHelp" },
         { reg: "^#ai记忆", fnc: "showMemory" },
         { reg: "^#ai帮助", fnc: "showHelp" },
+        // 审批应答（仅在确有挂起的审批时才接管，否则交回其它插件）
+        { reg: "^(允许|拒绝)$", fnc: "approvalReply", permission: "master" },
         // 兜底：识别 #ai消息（漏了空格）并给出提示，放在最后避免抢占上面的指令
         { reg: "^#ai\\S", fnc: "usageHint" },
         { reg: "^#agent\\S", fnc: "usageHint" },
       ],
     })
+  }
+
+  async approvalReply(e) {
+    const key = approvalKey(e)
+    const pending = pendingApprovals.get(key)
+    if (!pending) return false          // 没有待审批项：让其它插件处理这条消息
+
+    pendingApprovals.delete(key)
+    clearTimeout(pending.timer)
+    const allowed = /允许|同意|approve|yes/i.test(String(e.msg || ""))
+    pending.resolve(allowed ? "allowed-once" : "denied")
+    await e.reply(allowed ? `✅ 已允许本次操作（${pending.tool}）` : `⛔ 已拒绝本次操作（${pending.tool}）`)
+    return true
   }
 
   async usageHint(e) {
@@ -298,15 +352,15 @@ export class AiAgent extends plugin {
   }
 
   async clearChat(e) {
-    // 只清除当前会话（本群 / 本私聊），不再连带清掉其他群的上下文
+    // 只清除当前会话（本群 / 本私聊），包括引擎的持久化会话日志
     const sessionKey = sessionKeyOf(e, e.user_id)
-    agentCore.clearSession(sessionKey)
-    await e.reply("✅ 已清除当前会话的对话上下文")
+    await agentCore.clearSession(sessionKey)
+    await e.reply("✅ 已清除当前会话的对话上下文（含 Agent 会话日志）")
   }
 
   async resetAll(e) {
-    // 1. 清空所有用户的对话缓存
-    const userCount = agentCore.clearAllSessions()
+    // 1. 清空所有会话（引擎 agent + 轻量上下文）
+    const userCount = await agentCore.clearAllSessions()
 
     // 2. 丢弃内存缓存并重新从磁盘加载（先落盘，避免丢数据）
     await memoryManager.reload()
@@ -340,7 +394,10 @@ export class AiAgent extends plugin {
   async showHistory(e) {
     const sessionKey = sessionKeyOf(e, e.user_id)
     const state = agentCore.getSessionState(sessionKey)
-    const messages = contextManager.getMessages(sessionKey)
+
+    // Agent 会话优先用引擎日志派生（DSH 风格：历史永远由日志派生）
+    const engineMessages = agentCore.getEngineHistory(sessionKey, 40)
+    const messages = engineMessages.length ? engineMessages : contextManager.getMessages(sessionKey)
 
     if (!messages.length) return e.reply("📭 暂无对话历史")
 
@@ -361,7 +418,8 @@ export class AiAgent extends plugin {
       lines.push(`${role} ${content}${toolInfo}`)
     }
 
-    const header = `📜 对话历史 (${state.messageCount}条, ~${state.estimatedTokens} tokens${state.compressed ? ", 已压缩" : ""})`
+    const engineInfo = state.engine ? ` | 引擎 seq=${state.engine.seq}` : ""
+    const header = `📜 对话历史 (${messages.length}条${engineInfo})`
     await sendAsForward(e, header, lines.join("\n"))
   }
 
@@ -381,6 +439,7 @@ export class AiAgent extends plugin {
       "aiRateLimit", "aiWhitelist", "aiRequireMaster",
       "allowShell", "allowFileWrite", "allowFileDelete", "allowExecuteCode",
       "allowLocalFileImages",
+      "toolApproval", "approvalTimeout", "maxParallelToolCalls", "contextWindow",
     ]
     if (!allowedKeys.includes(key)) {
       return e.reply(`❌ 未知配置项: ${key}\n可用: ${allowedKeys.join(", ")}`)
@@ -433,6 +492,11 @@ export class AiAgent extends plugin {
       `allowFileDelete: ${cfg.allowFileDelete !== false}`,
       `allowExecuteCode: ${cfg.allowExecuteCode !== false}`,
       `allowLocalFileImages: ${cfg.allowLocalFileImages !== false}`,
+      "[DSH 风格引擎]",
+      `toolApproval: ${cfg.toolApproval === true}（高危工具需在聊天里确认）`,
+      `approvalTimeout: ${cfg.approvalTimeout ?? 120000} ms`,
+      `maxParallelToolCalls: ${cfg.maxParallelToolCalls ?? 10}`,
+      `contextWindow: ${cfg.contextWindow ?? 128000}`,
     ]
     await e.reply(lines.join("\n"))
   }
