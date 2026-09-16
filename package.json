@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "TRSS-Yunzai AI Agent 插件 - 支持对话、Agent 模式、Yunzai 插件调用",
   "type": "module",
-  "author": "EVA-02",
+  "author": "nianyuechan <https://github.com/nianyuechan>",
   "license": "GPL-3.0"
 }

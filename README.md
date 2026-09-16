@@ -6,7 +6,7 @@ TRSS-Yunzai AI Agent 插件，支持 AI 对话、Agent 模式、Yunzai 插件调
 
 ```bash
 # 在 TRSS-Yunzai 目录下
-git clone https://github.com/EVA-02-Studio/agent-plugin.git plugins/agent-plugin
+git clone https://github.com/nianyuechan/agent-plugin.git plugins/agent-plugin
 ```
 
 ## 配置
